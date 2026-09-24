@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.eggs/
+*.egg-info/
+build/
+dist/
+.env
+.env.*
+data/
+*.pdf
+*.faiss
+*.index
+*.vector.json
+*.ocr.json
+review_queue.csv
