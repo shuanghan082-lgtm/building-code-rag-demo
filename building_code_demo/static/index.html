@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>建筑规范条文检索演示</title>
+  <style>
+    :root { color-scheme: light; --ink:#18302e; --muted:#55706c; --line:#d9e5de; --accent:#137a5a; --bg:#f4f8f5; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:16px/1.65 "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+    main { max-width:980px; margin:0 auto; padding:42px 24px 80px; }
+    .eyebrow { color:var(--accent); font-size:.8rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+    h1 { font-size:clamp(2rem,4vw,3.2rem); line-height:1.2; margin:12px 0; }
+    p { margin:0 0 16px; }
+    .intro { color:var(--muted); max-width:760px; }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:20px; box-shadow:0 14px 32px rgba(22,56,42,.05); padding:28px; margin-top:26px; }
+    label { display:block; font-weight:700; margin-bottom:10px; }
+    textarea { width:100%; min-height:100px; resize:vertical; border:1px solid #a9beb4; border-radius:12px; padding:15px; font:inherit; color:var(--ink); background:#fff; }
+    textarea:focus { outline:3px solid #bdebd6; border-color:var(--accent); }
+    .actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:14px; }
+    button { border:0; border-radius:10px; padding:11px 18px; font:inherit; font-weight:700; cursor:pointer; background:var(--accent); color:white; }
+    button.secondary { color:var(--accent); background:#e3f3eb; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .hint { color:var(--muted); font-size:.88rem; margin-top:10px; }
+    .examples { display:flex; flex-wrap:wrap; gap:8px; margin-top:17px; }
+    .examples button { font-size:.85rem; padding:7px 11px; background:#eef4ef; color:var(--muted); font-weight:500; }
+    .meta { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
+    .meta span { background:#e6f0e8; color:#335d4c; border-radius:999px; padding:4px 11px; font-size:.85rem; }
+    #feedback { min-height:28px; margin-top:18px; color:var(--muted); }
+    .hit { border-top:1px solid var(--line); padding:20px 0; }
+    .hit:first-child { border-top:0; }
+    .hit-title { display:flex; justify-content:space-between; gap:16px; align-items:baseline; font-weight:700; }
+    .hit p { margin:9px 0; white-space:pre-wrap; }
+    .hit a { color:var(--accent); text-decoration:underline; }
+    .small { color:var(--muted); font-size:.85rem; }
+    .answer { background:#eff7f1; border-left:4px solid var(--accent); padding:18px; margin:18px 0; border-radius:0 10px 10px 0; white-space:pre-wrap; }
+    .warning { border-left:4px solid #d29a2b; background:#fff8e8; padding:15px 18px; border-radius:0 8px 8px 0; font-size:.9rem; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Personal portfolio · Source-traceable prototype</div>
+  <h1>建筑规范条文检索演示</h1>
+  <p class="intro">输入问题，查看相关条文候选及 PDF 原页。节选版支持条文检索；完整扫描版只提供试验性页码定位，正文仍在逐条核验。模型导读是可选功能，不能代替原文或专业审查。</p>
+  <div class="meta" id="meta"></div>
+  <section class="panel">
+    <label for="question">你想查找什么？</label>
+    <textarea id="question" maxlength="300" placeholder="例如：阳台栏杆高度应查哪条？"></textarea>
+    <div class="actions"><button id="search">检索节选条文</button><button class="secondary" id="scan" disabled>定位完整扫描版页面</button><button class="secondary" id="answer" disabled>生成模型导读</button></div>
+    <div class="hint" id="model-hint">正在检查本地配置…</div>
+    <div class="examples">
+      <button data-question="阳台栏杆高度应查哪条？">阳台栏杆</button>
+      <button data-question="公共厕所隔间外开门时通道净宽查哪条？">厕所通道</button>
+      <button data-question="请查规范第6.6.9条">缺失条文</button>
+    </div>
+  </section>
+  <div id="feedback" role="status"></div>
+  <section class="panel" id="results" hidden>
+    <h2>检索结果</h2>
+    <div class="warning" id="result-warning">这是条文定位工具。提取文字可能有 OCR/字体映射误差；涉及数值、适用条件和现行版本时，请打开原 PDF 页面核查。</div>
+    <div id="answer-box"></div>
+    <div id="hits"></div>
+  </section>
+</main>
+<script>
+  const byId = id => document.getElementById(id);
+  const question = byId('question');
+  const searchButton = byId('search');
+  const scanButton = byId('scan');
+  const answerButton = byId('answer');
+  const feedback = byId('feedback');
+  let busy = false;
+
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+  async function setup() {
+    try {
+      const response = await fetch('/api/info');
+      if (!response.ok) throw new Error('资料状态读取失败');
+      const info = await response.json();
+      const meta = byId('meta');
+      [info.standard, info.scope, `${info.clauses} 条节选候选`, `${info.retrieval_mode} 检索`].forEach(label => meta.append(el('span', label)));
+      answerButton.disabled = !info.chat_configured;
+      scanButton.disabled = !info.scan_locator_available;
+      if (info.scan_locator_available) meta.append(el('span', '24 页扫描版：仅定位原页'));
+      byId('model-hint').textContent = info.chat_configured ? '模型导读会把本次检索到的条文文字发送到所配置的模型服务。' : '未配置模型：离线检索仍可使用。模型导读需在本机环境变量中配置。';
+    } catch (error) { feedback.textContent = error.message; }
+  }
+  async function run(kind) {
+    if (busy) return;
+    const value = question.value.trim();
+    if (!value) { feedback.textContent = '请先输入问题。'; question.focus(); return; }
+    busy = true; searchButton.disabled = true; scanButton.disabled = true; answerButton.disabled = true;
+    feedback.textContent = kind === 'answer' ? '正在生成带来源检查的导读…' : kind === 'scan' ? '正在定位扫描版页面…' : '正在查找候选条文…';
+    byId('results').hidden = true;
+    try {
+      const response = await fetch(`/api/${kind}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:value,top_k:3})});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '请求失败');
+      byId('results').hidden = false;
+      const answerBox = byId('answer-box'); answerBox.replaceChildren();
+      byId('result-warning').textContent = kind === 'scan' ? '完整扫描版的 OCR 正文尚未人工核验。以下只显示候选 PDF 页码与编号，不能作为规范答案。' : '这是条文定位工具。提取文字可能有 OCR/字体映射误差；涉及数值、适用条件和现行版本时，请打开原 PDF 页面核查。';
+      if (data.answer) {
+        const label = data.answer.status === 'draft' ? '模型导读（待核验）' : '无法确认';
+        answerBox.append(el('h3', label), el('div', data.answer.text, 'answer'), el('p', data.answer.reason, 'small'));
+      }
+      const hits = byId('hits'); hits.replaceChildren();
+      if (!data.hits.length) hits.append(el('p', kind === 'scan' ? '扫描版没有定位到相关页面，请直接检查原 PDF。' : '节选中没有找到对应条文。请核对原始标准及其现行状态。'));
+      data.hits.forEach((item, i) => {
+        const card = el('article', undefined, 'hit');
+        const title = el('div', undefined, 'hit-title');
+        if (kind === 'scan') {
+          title.append(el('span', `${i+1}. 完整扫描版 PDF 第 ${item.pdf_page} 页`));
+          card.append(title, el('p', `候选编号：${item.candidate_clause_numbers.join('、') || '无'}`), el('p', item.warning, 'small'));
+        } else {
+          title.append(el('span', `${i+1}. 条文 ${item.clause}`), el('span', `PDF 第 ${item.pdf_page_first}${item.pdf_page_last !== item.pdf_page_first ? '–'+item.pdf_page_last : ''} 页`, 'small'));
+          card.append(title, el('p', item.snippet));
+          (item.warnings || []).forEach(warning => card.append(el('p', warning, 'small')));
+        }
+        const link = el('a', '打开政府 PDF 原页 ↗'); link.href = item.source_url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        card.append(link);
+        hits.append(card);
+      });
+      feedback.textContent = `找到 ${data.hits.length} ${kind === 'scan' ? '个候选页面' : '条候选'}；请核对原页。`;
+    } catch (error) { feedback.textContent = error.message; }
+    finally { busy = false; searchButton.disabled = false; const info = await fetch('/api/info').then(r=>r.json()).catch(()=>null); answerButton.disabled = !(info && info.chat_configured); scanButton.disabled = !(info && info.scan_locator_available); }
+  }
+  searchButton.addEventListener('click', () => run('search'));
+  scanButton.addEventListener('click', () => run('scan'));
+  answerButton.addEventListener('click', () => run('answer'));
+  document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => {question.value=button.dataset.question; question.focus();}));
+  setup();
+</script>
+</body>
+</html>
